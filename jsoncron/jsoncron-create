@@ -1,0 +1,19 @@
+#! /bin/bash
+
+
+echo "Insert hour" 
+read hour
+
+echo "Insert minute" 
+read minute
+echo "Insert dayOfMonth" 
+read dayOfMonth
+echo "Insert dayOfWeek" 
+read dayOfWeek
+echo "Insert month" 
+read month
+echo "Insert command" 
+read command
+bcommand=$(echo $command| base64) 
+
+echo "{ \"hour\":\"$hour\", \"minute\":\"$minute\", \"dayOfMonth\":\"$dayOfMonth\", \"month\":\"$month\", \"dayOfWeek\":\"$dayOfWeek\", \"command\":\"$bcommand\" }"

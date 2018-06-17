@@ -1,0 +1,21 @@
+#! /usr/bin/env python
+
+import json
+import sys,os
+import base64
+
+filename=sys.argv[1]
+with open(filename) as f:
+    blob = json.load(f)
+    hour = blob['hour']
+    minute = blob['minute']
+    dayOfMonth = blob['dayOfMonth']
+    dayOfWeek = blob['dayOfWeek']
+    month = blob['month']
+    bcommand = blob['command']
+    command =base64.b64decode(bcommand)
+    cronline = minute + " " + hour + " " + dayOfMonth + " "+ month + " " + dayOfWeek + " " + command
+    cronline = cronline.rstrip("\n")
+    #cmd = "echo \""+ cronline + "\"| crontab -"
+    print ( cronline )
+    #os.system( cmd )

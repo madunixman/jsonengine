@@ -1,0 +1,6 @@
+{ "name": "example",
+	"tasks": [
+		{"name": "ATask", "type":"maven:install", "params": {"to": "recipient@gmail.com", "subject": "a short subject", "content": "bla bla bla..."}
+                }
+	]
+}

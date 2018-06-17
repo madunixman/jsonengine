@@ -1,0 +1,130 @@
+#! /usr/bin/env python3
+
+import sys, getopt
+import json
+import os
+import subprocess
+import uuid
+import base64
+from pathlib import Path
+
+home = str(Path.home())
+pprefix = "__"
+ppostfix = "__"
+taskdir = home + "/.taskdir/"
+env_prefix = "fsm_"
+
+def parse_task(taskname):
+    filename = taskdir + "/" + taskname + ".json"
+    json_data = open(filename)
+    data = json.load(json_data)
+    json_data.close()
+    return data
+
+def get_name(filename):
+    json_data = open(filename)
+    doc = json.load(json_data)
+    json_data.close()
+    return doc['name']
+
+def get_tasks(filename):
+    json_data = open(filename)
+    doc = json.load(json_data)
+    json_data.close()
+    return doc['tasks']
+
+def create_workdir():
+    unique_id =str(uuid.uuid1())
+    workdir = "/tmp/" + unique_id
+    logdir = "/tmp/" + unique_id + "/log"
+    os.mkdir(workdir)
+    os.mkdir(logdir)
+    return workdir
+
+def start_task(task):
+        print ("START task:" + task['name'])
+
+def stop_task(task):
+        print ("STOP task:" + task['name'])
+
+def load_fsm(fsm_name):
+    name = get_name(fsm_name)
+    print ("FSM name:" + name)
+    tasks = get_tasks(fsm_name)
+    index = 0
+    workdir = create_workdir()
+    general_metadata = []
+    
+    for t in tasks:
+        metadata = {}
+        metadata['workdir'] = workdir
+        metadata['name'] = t['name']
+        metadata['type'] = t['type']
+        params = t['params']
+        keys = params.keys()
+        params = t['params']
+        m4filename = taskdir + "/" + t['type'] + ".m4"
+        f = open(m4filename, "r")
+        data = f.read()
+        f.close()
+        for key in keys:
+            value = params[key]
+            print('k/v:' + key + '/' + value)
+            b64value = base64.b64encode(bytes(value, "utf-8")).decode('ascii')
+            placeholder_string = "{}{}{}".format(pprefix, key, ppostfix)
+            print ('placeholder_string:[' + placeholder_string+ ']')
+            print ('data BEFORE:' + data)
+            data = data.replace(placeholder_string, value)
+            print ('data AFTER:' + data)
+        out_filename = (workdir + "/" + str(index).zfill(4) + "_" + t['name'] + ".sh")
+        out_file = open(out_filename, "w")
+        out_file.write(data)
+        out_file.close()
+        metadata['exe'] = out_filename
+        general_metadata.append(metadata)
+        index = index + 1
+    return general_metadata
+
+def get_workdir(task_list):
+    return task_list[0]['workdir']
+
+def debug_generated(task_list):
+    for task in task_list:
+        print("task:[" + task['name'] +
+              "] type:[" + task['type'] + "] exe:[" + task['exe'] + "]")
+
+def execute_generated(workdir, task_list):
+    for task in task_list:
+        out_filename = (workdir + "/log/"
+                        + os.path.basename(task['exe']) + ".log")
+        out_file = open(out_filename, "w")
+        start_task(task)
+        subprocess.call(["/bin/bash", task['exe']], stdout=out_file)
+        stop_task(task)
+        out_file.close()
+
+def process(inputfile):
+    task_list = load_fsm(inputfile)
+    workdir = get_workdir(task_list)
+    print ("workdir:[" + workdir + "]")
+    execute_generated(workdir, task_list)
+
+def main(argv):
+    inputfile = ''
+    try:
+       opts, args = getopt.getopt(argv,"i:",["ifile="])
+    except getopt.GetoptError:
+        print ("fsmengine -i <fsm-input-file>")
+        sys.exit(2)
+    for opt, arg in opts:
+        if opt == '-h':
+            print ("fsmengine -i <fsm-input-file>'")
+            sys.exit()
+        elif opt in ("-i", "--ifile"):
+            inputfile = arg
+            print ("Input file is ", inputfile)
+            process(inputfile)
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
+

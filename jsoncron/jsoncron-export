@@ -1,0 +1,24 @@
+#! /bin/bash
+
+CRON_TASKS=$(crontab -l | grep -v  "^#")
+index=${#CRON_TASKS[@]}
+
+IFS=$'\n'
+echo "["
+for t in $CRON_TASKS; do
+    random_id=$(uuid)
+    minute=$(echo $t | awk '{print $1}')
+    hour=$(echo $t | awk '{print $2}')
+    dayOfMonth=$(echo $t | awk '{print $3}')
+    month=$(echo $t | awk '{print $4}')
+    dayOfWeek=$(echo $t | awk '{print $5}')
+    command=$(echo $t |  awk -v ORS=" " -F" " '{ for (i=6; i<=NF; i++) print $i}')
+    bcommand=$(echo $command| base64)
+    #if [ "$index" != "0" ]; then
+    #    echo "{ \"hour\":\"$hour\", \"minute\":\"$minute\", \"dayOfMonth\":\"$dayOfMonth\", \"month\":\"$month\", \"dayOfWeek\":\"$dayOfWeek\", \"command\":\"$bcommand\" },"
+    #else
+        echo "{ \"hour\":\"$hour\", \"minute\":\"$minute\", \"dayOfMonth\":\"$dayOfMonth\", \"month\":\"$month\", \"dayOfWeek\":\"$dayOfWeek\", \"command\":\"$bcommand\" }" > ${random_id}.json
+    #fi
+    index=$(echo "$index -1"| bc)
+done
+echo "]" 
