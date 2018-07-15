@@ -1,0 +1,149 @@
+#! /bin/bash 
+
+# Convention over configuration
+
+CFG_FILE=$HOME/.eron.cfg
+WORKDIR=$HOME/.eron/tasks
+
+test -f $CFG_FILE && source $CFG_FILE
+test -d $WORKDIR || mkdir $WORKDIR
+SECURE_CA_HOME=${SECURE_HOME}/CA
+CA_CERTIFICATE=${SECURE_CA_HOME}/ca.crt
+CERTIFICATE=${SECURE_HOME}/${SECURE_SERVICE}/certs/${SECURE_CLIENT}/${SECURE_CLIENT}.crt
+PRIVATE_KEY=${SECURE_HOME}/${SECURE_SERVICE}/certs/${SECURE_CLIENT}/${SECURE_CLIENT}.key
+
+test -f ${CA_CERTIFICATE} || echo "Missing CA file: ${CA_CERTIFICATE}" 
+test -f ${CERTIFICATE} || echo "Missing Certificate file: ${CERTIFICATE}"  
+test -f ${PRIVATE_KEY} || echo "Missing Private KEY file: ${PRIVATE_KEY}"  
+
+MODE="curl"
+TMPFILE=$(mktemp /tmp/unsecure_XXXXXXXX)
+POST_BACKEND=${ENDPOINT}/content/post
+GET_BACKEND=${ENDPOINT}/content/get
+
+CURRDIR=$(dirname $0)
+JSONENGINE_EXE=$CURRDIR/jsonengine
+
+function write_empty_config()
+{
+	echo "ENDPOINT="> $CFG_FILE
+	echo "SECURE_HOME=">> $CFG_FILE
+	echo "SECURE_SERVICE=">> $CFG_FILE
+	echo "SECURE_CLIENT=">> $CFG_FILE
+	echo "joc_domain=">> $CFG_FILE
+	echo "Edit config file: [$CFG_FILE]"
+}
+
+function test_config()
+{
+	test -f $CFG_FILE || write_empty_config 
+}
+
+function secure_get()
+{
+	url=$1
+	if [ "$MODE" = "wget" ]; then
+		GET_COMMAND="wget -q  -O - --ca-certificate=${CA_CERTIFICATE} --certificate=${CERTIFICATE} --private-key=${PRIVATE_KEY}  --certificate-type=PEM --no-check-certificate" 
+	fi
+
+	if [ "$MODE" = "curl" ]; then
+		#GET_COMMAND="curl -s --cacert ${CA_CERTIFICATE} --cert ${CERTIFICATE} --key ${PRIVATE_KEY} --socks5-hostname localhost:9050 --cert-type PEM -k "
+		GET_COMMAND="curl -s --cacert ${CA_CERTIFICATE} --cert ${CERTIFICATE} --key ${PRIVATE_KEY}  --cert-type PEM -k "
+	fi
+	$GET_COMMAND $url
+}
+
+
+function dispatch()
+{
+	curl -k --cert-type pem \
+ 		--cacert ${CA_CERTIFICATE}\
+		--cert ${CERTIFICATE}\
+ 		--key ${PRIVATE_KEY}\
+		-H "Content-Type: application/json" \
+        	--data  "{\"domain\":\"${joc_domain}\",\"title\":\"${joc_title}\", \"content\":\"${joc_content}\", \"tag\":\"${joc_tag}\" ,\"code\":\"${joc_code}\" }" \
+        	${POST_BACKEND}
+}
+
+function cl_usage()
+{
+	echo "Usage: $0 [-i input_file] | [-c] | [-l] | [-s <mnemonic>]"
+}
+
+function collect_input_from_user()
+{
+	echo "Title:"
+	read joc_title
+	echo "Content:"
+	read joc_uncoded
+	echo $joc_uncoded | base64 > /tmp/base64_enc.txt
+	joc_content=$(tr -d '\n' < /tmp/base64_enc.txt)
+	echo "Code:" 
+	read joc_code 
+}
+
+function collect_file_input()
+{
+	input_file=$1
+	joc_title=$(head -1 $input_file)
+	cat $input_file | base64 > /tmp/base64_enc.txt
+	joc_content=$(tr -d '\n' < /tmp/base64_enc.txt)
+	echo "Code:"
+	read joc_code
+}
+
+function retrieve_tasks()
+{
+    json=$1
+    for x in $( $JSONENGINE_EXE -p $json ); do
+        echo "Retrieving task [$x]"; 
+        if [ ! -f ${WORKDIR}/${x} ]; then  
+            secure_get ${GET_BACKEND}/$x > ${TMPFILE}
+            cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["content"]' | base64 -d > ${WORKDIR}/${x}
+        else 
+          echo "Task [$x] already present";
+        fi
+    done
+}
+
+# MAIN
+test_config 
+
+if [ "$#" == 1 ]; then
+	if [ "$1" == "-c" ]; then
+		joc_tag="post"
+		collect_input_from_user 
+		dispatch 
+		exit 0
+	elif [ "$1" == "-l" ]; then
+		secure_get ${GET_BACKEND} > ${TMPFILE}
+		cat ${TMPFILE} |  python -c 'import sys, json; print json.dumps(json.load(sys.stdin),indent=4)'
+		exit 0
+	else
+		cl_usage
+		exit 1
+	fi
+fi
+	
+if [ "$#" == 2 ]; then
+	opt=$1
+	argvalue=$2
+	if [ "$opt" == "-i" ]; then
+		collect_file_input $argvalue
+		dispatch
+	elif [ "$opt" == "-s" ]; then
+		secure_get ${GET_BACKEND}/$argvalue > ${TMPFILE}
+		cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["content"]' | base64 -d
+		exit 0
+	elif [ "$opt" == "-x" ]; then
+            retrieve_tasks $argvalue
+            ${JSONENGINE_EXE} -i $argvalue
+            exit 0
+	else
+		cl_usage
+		exit 1
+	fi
+else
+	cl_usage
+	exit 1
+fi

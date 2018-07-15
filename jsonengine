@@ -1,5 +1,6 @@
 #! /usr/bin/env python3
 
+# for x in $(./jsonengine -p doc/jobs/remote.json ); do echo "Processing [$x]"; done
 import sys, getopt
 import json
 import os
@@ -11,11 +12,16 @@ from pathlib import Path
 home = str(Path.home())
 pprefix = "__"
 ppostfix = "__"
-taskdir = home + "/.taskdir/"
+taskdir = home + "/.eron/tasks"
 env_prefix = "fsm_"
 
-def parse_task(taskname):
+
+def get_task_from_taskname(taskname):
     filename = taskdir + "/" + taskname + ".json"
+    return filename
+
+def parse_task(taskname):
+    filename = get_task_from_taskname(taskname)
     json_data = open(filename)
     data = json.load(json_data)
     json_data.close()
@@ -47,6 +53,22 @@ def start_task(task):
 def stop_task(task):
         print ("STOP task:" + task['name'])
 
+
+def load_tasktypes(inputfile):
+    print_types(inputfile)
+
+def print_types(fsm_name):
+    tasks = get_tasks(fsm_name)
+    index = 0
+    workdir = create_workdir()
+    general_metadata = []
+    
+    for t in tasks:
+        metadata = {}
+        metadata['workdir'] = workdir
+        metadata['name'] = t['name']
+        print(t['type'])
+
 def load_fsm(fsm_name):
     name = get_name(fsm_name)
     print ("FSM name:" + name)
@@ -63,7 +85,8 @@ def load_fsm(fsm_name):
         params = t['params']
         keys = params.keys()
         params = t['params']
-        m4filename = taskdir + "/" + t['type'] + ".m4"
+        #m4filename = taskdir + "/" + t['type'] + ".m4"
+        m4filename = taskdir + "/" + t['type'] 
         f = open(m4filename, "r")
         data = f.read()
         f.close()
@@ -84,6 +107,7 @@ def load_fsm(fsm_name):
         general_metadata.append(metadata)
         index = index + 1
     return general_metadata
+
 
 def get_workdir(task_list):
     return task_list[0]['workdir']
@@ -112,7 +136,7 @@ def process(inputfile):
 def main(argv):
     inputfile = ''
     try:
-       opts, args = getopt.getopt(argv,"i:",["ifile="])
+       opts, args = getopt.getopt(argv,"i:p:",["ifile="])
     except getopt.GetoptError:
         print ("fsmengine -i <fsm-input-file>")
         sys.exit(2)
@@ -124,6 +148,9 @@ def main(argv):
             inputfile = arg
             print ("Input file is ", inputfile)
             process(inputfile)
+        elif opt in ("-p", "--print-tasks"):
+            inputfile = arg
+            load_tasktypes(inputfile)
 
 if __name__ == "__main__":
     main(sys.argv[1:])
