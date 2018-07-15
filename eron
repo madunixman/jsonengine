@@ -1,5 +1,6 @@
 #! /bin/bash 
 
+# Paolo Lulli 2018
 # Convention over configuration
 
 CFG_FILE=$HOME/.eron.cfg

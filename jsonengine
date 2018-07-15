@@ -1,6 +1,7 @@
 #! /usr/bin/env python3
 
-# for x in $(./jsonengine -p doc/jobs/remote.json ); do echo "Processing [$x]"; done
+# Paolo Lulli 2018
+
 import sys, getopt
 import json
 import os
