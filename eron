@@ -67,7 +67,7 @@ function dispatch()
 
 function cl_usage()
 {
-	echo "Usage: $0 [-i input_file] | [-c] | [-l] | [-s <mnemonic>]"
+	echo "Usage: $0 [-i input-file] | [-c] | [-l] | [-s <mnemonic>] | [-x <tasklist.json>]"
 }
 
 function collect_input_from_user()
