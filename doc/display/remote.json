@@ -1,0 +1,9 @@
+{"name": "example",
+	"tasks": 
+        [
+		{"name": "First Task", "type":"remote_command", "params": {"username": "recipient@gmail.com", "hostname": "a short subject", "command": "bla bla bla...", "extra": "ND"} },
+
+		{"name": "A Second Task", "type":"whatever", "params": {"username": "recipient@gmail.com", "hostname": "a short subject", "command": "bla bla bla..."} },
+		{"name": "A third Task", "type":"whatever", "params": {"username": "recipient@gmail.com", "hostname": "a short subject", "command": "bla bla bla..."} }
+	]
+}
