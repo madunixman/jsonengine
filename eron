@@ -82,15 +82,21 @@ function dispatch()
 
 function cl_usage()
 {
-	echo "Usage: $0 [-i input-task-file] | [-c]|[-l]|[-e]|[-r][-s <mnemonic>]|[-x <job.json>]|[-X </path/to/job.json>|[-o <job>]|[-O <job>]|[-J]|[-T]|[-l]"
-        echo "    -i input-task-file       : loads task file on server"
+	echo "Usage: $0 [-i file] |[-c|-l|-e|-r|-J|-l|-T]|[-s <code>]|[-X </path/to/job.json>|[-x|-o|-O|-E <job>]| [ -I </path/to/jobx.tar.gz>]"
+        echo "    -i <file>                : loads task file on server"
         echo "    -X </path/to/job.json>   : executes job defined in file <job.json>"
         echo "    -x <job>                 : executes job defined in standard location as <job>"
         echo "    -r <job>                 : appends <job> to cron"
+        echo "    -u <job>                 : upload <job> configuration"
+        echo "    -b <job>                 : download <job> configuration and run (boot/blind)"
         echo "    -R <job>                 : inserts <job> to cron (deletes other jobs)"
         echo "    -o <job>                 : write job on local db to <job.json>"
+        echo "    -E <job>                 : exports <job> files as a standalone package"
+        echo "    -I </path/to/jobx.tar.gz>: imports <job> definition and tasks from a *.tar.gz"
         echo "    -O <job>                 : dumps job on local db to output"
-        echo "    -s mnemonic              : downloads locally task definition"
+        echo "    -g <job>                 : generate skeleton for tasks in <job>"
+        echo "    -s code                  : downloads remote task definition"
+        echo "    -S code                  : downloads remote task and load on local db"
         echo "    -e                       : locally edit job definition"
         echo "    -J                       : list local job definitions"
         echo "    -T                       : list local task definitions"
@@ -110,6 +116,16 @@ function collect_input_from_user()
 	read joc_code 
 }
 
+function upload_job_definition()
+{
+	jobname=$1
+        jobfile=$JOBDIR"/"$jobname".json"
+	joc_title="eron:job:$jobname"
+	cat $jobfile | base64 > /tmp/base64_enc.txt
+	joc_content=$(tr -d '\n' < /tmp/base64_enc.txt)
+	joc_code="eron:job:$jobname"
+}
+
 function collect_file_input()
 {
 	input_file=$1
@@ -118,6 +134,36 @@ function collect_file_input()
 	joc_content=$(tr -d '\n' < /tmp/base64_enc.txt)
 	echo "Code:"
 	read joc_code
+}
+
+function import_json_job()
+{
+    tgzfile=$1
+    tar -xvf $tgzfile -C $ERON_HOME --strip-components=1
+}
+
+
+function export_json_job()
+{
+    jobname=$1
+    json=$JOBDIR"/"$jobname".json"
+    TMPDIR=$(mktemp -d /tmp/eron_job_export_XXXXXX)
+    CURRENT_DATE=$(date '+%Y%m%d')
+    mkdir -p $TMPDIR"/job-"$jobname
+    mkdir -p $TMPDIR"/job-"$jobname"/tasks"
+    mkdir -p $TMPDIR"/job-"$jobname"/jobs"
+    for x in $( $JSONENGINE_EXE -p $json ); do
+        echo "Processing task [$x]"; 
+        if [ ! -f ${WORKDIR}/${x} ]; then  
+            secure_get ${GET_BACKEND}/$x > ${TMPFILE}
+            cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["content"]' | base64 -d > ${WORKDIR}/${x}
+        else 
+          echo "Task [$x] already present";
+        fi
+        cp ${WORKDIR}/${x} $TMPDIR"/job-"$jobname"/tasks/"
+    done
+    cp $json $TMPDIR"/job-"$jobname"/jobs/"
+    tar cvfz "job-"$jobname"-"$CURRENT_DATE".tar.gz" -C $TMPDIR "job-"$jobname 
 }
 
 function retrieve_tasks()
@@ -291,6 +337,18 @@ function edit_job()
     done
 }
 
+function remote_to_local_db()
+{
+    code=$1
+    secure_get ${GET_BACKEND}/$code > ${TMPFILE}
+    remote_id=$(cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["id"]') 
+    title=$(cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["title"]') 
+    content=$(cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["content"]') 
+    sql="insert into rc_content (id_content, code, title, content) values ('$remote_id', '$code', '$title', '$content');"
+    test -f $DIAG_DB || return 1
+    echo $sql | sqlite3 $DIAG_DB
+}
+
 function insert_param()
 {
         id_taskparam=$(uuidgen)
@@ -344,6 +402,8 @@ function create_db()
 	echo $sql_job | sqlite3 $DIAG_DB
 	echo $sql_task | sqlite3 $DIAG_DB
 	echo $sql_param | sqlite3 $DIAG_DB
+	sql_content="create table rc_content (id_content text, code text, title text, content text);"
+	echo $sql_content | sqlite3 $DIAG_DB
 }
 
 
@@ -413,6 +473,19 @@ if [ "$#" = "2" ]; then
 	if [ "$opt" == "-i" ]; then
 		collect_file_input $argvalue
 		dispatch
+	elif [ "$opt" == "-u" ]; then
+		upload_job_definition $argvalue
+		dispatch
+                exit 0
+	elif [ "$opt" == "-W" ]; then
+                remote_to_local_db $argvalue
+                exit 0
+	elif [ "$opt" == "-E" ]; then
+		export_json_job $argvalue
+                exit 0
+	elif [ "$opt" == "-I" ]; then
+		import_json_job $argvalue
+                exit 0
 	elif [ "$opt" == "-O" ]; then
 		export_job $argvalue
                 exit 0
@@ -441,6 +514,14 @@ if [ "$#" = "2" ]; then
 	elif [ "$opt" == "-X" ]; then
             retrieve_tasks $argvalue
             ${JSONENGINE_EXE} -i $argvalue
+            exit 0
+	elif [ "$opt" == "-b" ]; then
+            jobfile=$JOBDIR"/"$argvalue".json"
+	    secure_get ${GET_BACKEND}/$argvalue > ${TMPFILE}
+	    cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["content"]' | base64 -d > $jobfile
+            echo "Reading job: [$jobfile]"
+            retrieve_tasks $jobfile
+            ${JSONENGINE_EXE} -i $jobfile
             exit 0
 	elif [ "$opt" == "-x" ]; then
             jobfile=$JOBDIR"/"$argvalue".json"
