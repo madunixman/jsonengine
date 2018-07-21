@@ -82,14 +82,18 @@ function dispatch()
 
 function cl_usage()
 {
-	echo "Usage: $0 [-i file] |[-c|-l|-e|-r|-J|-l|-T]|[-s <code>]|[-X </path/to/job.json>|[-x|-o|-O|-E <job>]| [ -I </path/to/jobx.tar.gz>]"
+	echo "Usage: $0 [-i file] |[-c|-l|-e|-r|-J|-l|-T|-z]|[-s <code>]|[-X </path/to/job.json>|[-x|-o|-O|-E <job>]| [ -I </path/to/jobx.tar.gz>]"
         echo "    -i <file>                : loads task file on server"
         echo "    -X </path/to/job.json>   : executes job defined in file <job.json>"
+        echo "    -p </path/to/cron.json>  : schedules on local cron </path/to/cron.json>"
+        echo "    -P <cron>                : schedules (pull) on local cron <cron> remote json"
+        echo "    -w <job>                 : writes local cron file for <job>"
+        echo "    -W </path/to/cron.json>  : writes remotely (push) local <cron.json>"
         echo "    -x <job>                 : executes job defined in standard location as <job>"
         echo "    -r <job>                 : appends <job> to cron"
-        echo "    -u <job>                 : upload <job> configuration"
-        echo "    -b <job>                 : download <job> configuration and run (boot/blind)"
-        echo "    -R <job>                 : inserts <job> to cron (deletes other jobs)"
+        echo "    -R <job>                 : inserts <job> to local cron (deletes other jobs)"
+        echo "    -u <job>                 : upload (push) <job> configuration"
+        echo "    -b <job>                 : download <job> configuration and run (bootstrap)"
         echo "    -o <job>                 : write job on local db to <job.json>"
         echo "    -E <job>                 : exports <job> files as a standalone package"
         echo "    -I </path/to/jobx.tar.gz>: imports <job> definition and tasks from a *.tar.gz"
@@ -102,6 +106,7 @@ function cl_usage()
         echo "    -T                       : list local task definitions"
         echo "    -l                       : list locally callable jobs"
         echo "    -L                       : lists remotely available tasks"
+        echo "    -z                       : send diagnostics data back to server"
 }
 
 function collect_input_from_user()
@@ -116,6 +121,27 @@ function collect_input_from_user()
 	read joc_code 
 }
 
+function diagnostic()
+{
+    diag_file=$(mktemp /tmp/diag_XXXXXX)
+    HOST=$(hostname)
+    KERNEL=$(uname -a)
+    D='/sys/class/net'
+    for nic in $( ls $D ); do
+    if  grep -q up $D/$nic/operstate; then
+        #nic_address=$(cat $D/$nic/address)
+        IP=$(ip addr show $nic | awk '/inet / {print $2}' | cut -d/ -f 1)
+        MAC=$(ip link show $nic | awk '/ether/ {print $2}')
+        echo "{\"serial\": \"$SERIAL_NO\", \"hostname\": \"$HOST\", \"ip\": \"$IP\", \"mac\": \"$MAC\","\
+	" \"device\": \"$nic\", \"kernel\": \"$KERNEL\"}" >> $diag_file
+    fi
+    done
+    joc_title=$SERIAL_NO
+    cat $diag_file | base64 > /tmp/base64_enc.txt
+    joc_content=$(tr -d '\n' < /tmp/base64_enc.txt)
+    joc_code=$SERIAL_NO
+}
+
 function upload_job_definition()
 {
 	jobname=$1
@@ -124,6 +150,16 @@ function upload_job_definition()
 	cat $jobfile | base64 > /tmp/base64_enc.txt
 	joc_content=$(tr -d '\n' < /tmp/base64_enc.txt)
 	joc_code="eron:job:$jobname"
+}
+
+function collect_cron_input()
+{
+	input_file=$1
+	echo "Code:"
+	read joc_code
+	joc_title=$joc_code
+	cat $input_file | base64 > /tmp/base64_jenc.txt
+	joc_content=$(tr -d '\n' < /tmp/base64_jenc.txt)
 }
 
 function collect_file_input()
@@ -141,7 +177,6 @@ function import_json_job()
     tgzfile=$1
     tar -xvf $tgzfile -C $ERON_HOME --strip-components=1
 }
-
 
 function export_json_job()
 {
@@ -337,6 +372,29 @@ function edit_job()
     done
 }
 
+function remote_list_to_local_db()
+{
+    secure_get ${GET_BACKEND} > ${TMPFILE}
+    cat ${TMPFILE} |  python -c 'import sys, json; print json.dumps(json.load(sys.stdin),indent=4)'
+    array_len=$(cat ${TMPFILE} | python -c 'import sys, json; print len(json.load(sys.stdin)["playlist"])')
+    acount=0;
+    while [ "$acount" -lt "$array_len" ]; do
+       echo "acount=$acount"
+       jsonblock=$(cat ${TMPFILE} | python -c "import sys, json; print json.load(sys.stdin)['playlist'][$acount]")
+       item_id=$(cat ${TMPFILE} | python -c "import sys, json; print json.load(sys.stdin)['playlist'][$acount]['id']")
+       item_title=$(cat ${TMPFILE} | python -c "import sys, json; print json.load(sys.stdin)['playlist'][$acount]['title']")
+       #echo $jsonblock
+       #item_id=$(echo $jsonblock | python -c 'import sys, json; print json.load(sys.stdin)["id"]')
+       #item_title=$(echo $jsonblock | python -c 'import sys, json; print json.load(sys.stdin)["title"]')
+       echo "ID: $item_id, TITLE: $item_title"
+       appo=$((acount++))
+       id_content=$(uuidgen)
+       sql="insert into rc_content (id_content, code, title, content) values ('$id_content', '$item_id', '$item_title', NULL);"
+       test -f $DIAG_DB || return 1
+       echo $sql | sqlite3 $DIAG_DB
+    done 
+}
+
 function remote_to_local_db()
 {
     code=$1
@@ -402,6 +460,7 @@ function create_db()
 	echo $sql_job | sqlite3 $DIAG_DB
 	echo $sql_task | sqlite3 $DIAG_DB
 	echo $sql_param | sqlite3 $DIAG_DB
+
 	sql_content="create table rc_content (id_content text, code text, title text, content text);"
 	echo $sql_content | sqlite3 $DIAG_DB
 }
@@ -433,6 +492,10 @@ function read_cron()
 test_config 
 test -f $DIAG_DB || create_db
 
+SERIAL_FILE=$ERON_HOME/.serial
+test -f $SERIAL_FILE || uuidgen > $SERIAL_FILE
+SERIAL_NO=$(cat $SERIAL_FILE)
+
 if [ "$#" = "1" ]; then
 	if [ "$1" == "-c" ]; then
 		joc_tag="post"
@@ -446,6 +509,9 @@ if [ "$#" = "1" ]; then
 	elif [ "$1" == "-l" ]; then
 		find $JOBDIR
 		exit 0
+	elif [ "$1" == "-X" ]; then
+		remote_list_to_local_db
+		exit 0
 	elif [ "$1" == "-J" ]; then
 		joblist=$(list_jobs) 
 		for j in $joblist; do
@@ -458,6 +524,10 @@ if [ "$#" = "1" ]; then
                    echo "$t"
                 done
 		exit 0
+	elif [ "$1" == "-z" ]; then
+                diagnostic
+		dispatch 
+                exit 0
 	elif [ "$1" == "-e" ]; then
                 edit_job
                 exit 0
@@ -473,11 +543,20 @@ if [ "$#" = "2" ]; then
 	if [ "$opt" == "-i" ]; then
 		collect_file_input $argvalue
 		dispatch
+	elif [ "$opt" == "-W" ]; then
+		collect_cron_input $argvalue
+		dispatch
+		exit 0
+	elif [ "$opt" == "-w" ]; then
+                TMP_CRON_FILE="cron-"$argvalue"-"$(uuidgen)".json"
+		read_cron $argvalue
+                echo "Created [$TMP_CRON_FILE]"
+		exit 0
 	elif [ "$opt" == "-u" ]; then
 		upload_job_definition $argvalue
 		dispatch
                 exit 0
-	elif [ "$opt" == "-W" ]; then
+	elif [ "$opt" == "-S" ]; then
                 remote_to_local_db $argvalue
                 exit 0
 	elif [ "$opt" == "-E" ]; then
@@ -498,6 +577,13 @@ if [ "$#" = "2" ]; then
 		read_cron $argvalue
                 ${JSONENGINE_EXE} -C $TMP_CRON_FILE
                 exit 0
+	elif [ "$opt" == "-p" ]; then
+                ${JSONENGINE_EXE} -c $argvalue
+                exit 0
+	elif [ "$opt" == "-P" ]; then
+	    secure_get ${GET_BACKEND}/$argvalue > ${TMPFILE}
+            ${JSONENGINE_EXE} -c ${TMPFILE}
+            exit 0
 	elif [ "$opt" == "-o" ]; then
 		export_job $argvalue > $JOBDIR/$argvalue".json"
                 exit 0
@@ -516,6 +602,9 @@ if [ "$#" = "2" ]; then
             ${JSONENGINE_EXE} -i $argvalue
             exit 0
 	elif [ "$opt" == "-b" ]; then
+            diagnostic
+	    dispatch 
+
             jobfile=$JOBDIR"/"$argvalue".json"
 	    secure_get ${GET_BACKEND}/$argvalue > ${TMPFILE}
 	    cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["content"]' | base64 -d > $jobfile
