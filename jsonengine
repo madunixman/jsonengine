@@ -71,10 +71,10 @@ def create_workdir():
     return workdir
 
 def start_task(task):
-        print ("START task:" + task['name'])
+        print ("START task: [" + task['name'] + "]")
 
 def stop_task(task):
-        print ("STOP task:" + task['name'])
+        print ("STOP task: [" + task['name'] + "]")
 
 
 def load_tasktypes(inputfile):
@@ -94,7 +94,7 @@ def print_types(fsm_name):
 
 def load_fsm(fsm_name):
     name = get_name(fsm_name)
-    print ("FSM name:" + name)
+    print ("FSM name: [" + name+ "]")
     tasks = get_tasks(fsm_name)
     index = 0
     workdir = create_workdir()
@@ -115,13 +115,13 @@ def load_fsm(fsm_name):
         f.close()
         for key in keys:
             value = params[key]
-            print('k/v:' + key + '/' + value)
+            print('param:' + key + ' value:' + value)
             b64value = base64.b64encode(bytes(value, "utf-8")).decode('ascii')
             placeholder_string = "{}{}{}".format(pprefix, key, ppostfix)
-            print ('placeholder_string:[' + placeholder_string+ ']')
-            print ('data BEFORE:' + data)
+            #print ('placeholder_string:[' + placeholder_string+ ']')
+            #print ('data BEFORE:' + data)
             data = data.replace(placeholder_string, value)
-            print ('data AFTER:' + data)
+            #print ('data AFTER:' + data)
         out_filename = (workdir + "/" + str(index).zfill(4) + "_" + t['name'] + ".sh")
         out_file = open(out_filename, "w")
         out_file.write(data)
@@ -169,7 +169,7 @@ def main(argv):
             sys.exit()
         elif opt in ("-i", "--ifile"):
             inputfile = arg
-            print ("Input file is:", inputfile)
+            print ("Input file is: ["+ inputfile + "]")
             process(inputfile)
         elif opt in ("-c"):
             inputfile = arg

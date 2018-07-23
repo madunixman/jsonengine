@@ -142,6 +142,20 @@ function diagnostic()
     joc_code=$SERIAL_NO
 }
 
+function mqtt_subscribe()
+{
+    topic_name=$SERIAL_NO
+    while read msg;
+    do
+      echo "[$msg]";
+      jobfile=$JOBDIR"/"$msg".json"
+      echo "Reading job: [$jobfile]"
+      retrieve_tasks $jobfile
+      ${JSONENGINE_EXE} -i $jobfile
+    done < <(mosquitto_sub -t $topic_name -q 1)
+}
+
+
 function upload_job_definition()
 {
 	jobname=$1
@@ -487,6 +501,17 @@ function read_cron()
     echo "{ \"hour\":\"$hour\", \"minute\":\"$minute\", \"dayOfMonth\":\"$dayOfMonth\", \"month\":\"$month\", \"dayOfWeek\":\"$dayOfWeek\", \"command\":\"$bcommand\" }" > $TMP_CRON_FILE
 }
 
+function list_local_jobs()
+{
+   #echo "JobDir=[$JOBDIR]"
+   idx=1
+   for f in $( find $JOBDIR ); do 
+       base_file=$(basename $f | sed -e s/.json$//;) 
+       echo $idx $base_file
+   appidx=$((idx+1))
+   idx=$appidx
+   done
+}
 
 # MAIN
 test_config 
@@ -507,9 +532,10 @@ if [ "$#" = "1" ]; then
 		cat ${TMPFILE} |  python -c 'import sys, json; print json.dumps(json.load(sys.stdin),indent=4)'
 		exit 0
 	elif [ "$1" == "-l" ]; then
-		find $JOBDIR
+		#find $JOBDIR
+                list_local_jobs
 		exit 0
-	elif [ "$1" == "-X" ]; then
+	elif [ "$1" == "-Y" ]; then
 		remote_list_to_local_db
 		exit 0
 	elif [ "$1" == "-J" ]; then
@@ -531,6 +557,9 @@ if [ "$#" = "1" ]; then
 	elif [ "$1" == "-e" ]; then
                 edit_job
                 exit 0
+	elif [ "$1" == "-t" ]; then
+		mqtt_subscribe
+		exit 0
 	else
 		cl_usage
 		exit 1
