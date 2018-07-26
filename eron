@@ -2,6 +2,14 @@
 
 # Paolo Lulli 2018
 
+CURRDIR=$(dirname $0)
+
+if [ -L $0 ]; then
+    CURRDIR=$(dirname "$(readlink -f "$0")")
+fi
+
+ERON_LIBDIR=$CURRDIR/lib
+
 if [ "$ERON_HOME" == "" ]; then
     ERON_HOME=$HOME/.eron
 fi
@@ -15,7 +23,6 @@ WORKDIR=$ERON_HOME/tasks
 JOBDIR=$ERON_HOME/jobs
 DIAG_DB=$ERON_HOME/job-config.db
 
-CURRDIR=$(dirname $0)
 OUTPUTDIR=.
 test -f $CFG_FILE && source $CFG_FILE
 test -d $ERON_HOME || mkdir $ERON_HOME
@@ -38,513 +45,15 @@ GET_BACKEND=${ENDPOINT}/content/get
 
 JSONENGINE_EXE=$CURRDIR/jsonengine
 
-
-function write_empty_config()
-{
-	echo "ENDPOINT="> $CFG_FILE
-	echo "SECURE_HOME=">> $CFG_FILE
-	echo "SECURE_SERVICE=">> $CFG_FILE
-	echo "SECURE_CLIENT=">> $CFG_FILE
-	echo "joc_domain=">> $CFG_FILE
-	echo "Edit config file: [$CFG_FILE]"
-}
-
-function test_config()
-{
-	test -f $CFG_FILE || write_empty_config 
-}
-
-function secure_get()
-{
-	url=$1
-	if [ "$MODE" = "wget" ]; then
-		GET_COMMAND="wget -q  -O - --ca-certificate=${CA_CERTIFICATE} --certificate=${CERTIFICATE} --private-key=${PRIVATE_KEY}  --certificate-type=PEM --no-check-certificate" 
-	fi
-
-	if [ "$MODE" = "curl" ]; then
-		#GET_COMMAND="curl -s --cacert ${CA_CERTIFICATE} --cert ${CERTIFICATE} --key ${PRIVATE_KEY} --socks5-hostname localhost:9050 --cert-type PEM -k "
-		GET_COMMAND="curl -s --cacert ${CA_CERTIFICATE} --cert ${CERTIFICATE} --key ${PRIVATE_KEY}  --cert-type PEM -k "
-	fi
-	$GET_COMMAND $url
-}
-
-
-function dispatch()
-{
-	curl -k --cert-type pem \
- 		--cacert ${CA_CERTIFICATE}\
-		--cert ${CERTIFICATE}\
- 		--key ${PRIVATE_KEY}\
-		-H "Content-Type: application/json" \
-        	--data  "{\"domain\":\"${joc_domain}\",\"title\":\"${joc_title}\", \"content\":\"${joc_content}\", \"tag\":\"${joc_tag}\" ,\"code\":\"${joc_code}\" }" \
-        	${POST_BACKEND}
-}
-
-function cl_usage()
-{
-	echo "Usage: $0 [-i file] |[-c|-l|-e|-r|-J|-l|-T|-z]|[-s <code>]|[-X </path/to/job.json>|[-x|-o|-O|-E <job>]| [ -I </path/to/jobx.tar.gz>]"
-        echo "    -i <file>                : loads task file on server"
-        echo "    -X </path/to/job.json>   : executes job defined in file <job.json>"
-        echo "    -p </path/to/cron.json>  : schedules on local cron </path/to/cron.json>"
-        echo "    -P <cron>                : schedules (pull) on local cron <cron> remote json"
-        echo "    -w <job>                 : writes local cron file for <job>"
-        echo "    -W </path/to/cron.json>  : writes remotely (push) local <cron.json>"
-        echo "    -x <job>                 : executes job defined in standard location as <job>"
-        echo "    -r <job>                 : appends <job> to cron"
-        echo "    -R <job>                 : inserts <job> to local cron (deletes other jobs)"
-        echo "    -u <job>                 : upload (push) <job> configuration"
-        echo "    -b <job>                 : download <job> configuration and run (bootstrap)"
-        echo "    -o <job>                 : write job on local db to <job.json>"
-        echo "    -E <job>                 : exports <job> files as a standalone package"
-        echo "    -I </path/to/jobx.tar.gz>: imports <job> definition and tasks from a *.tar.gz"
-        echo "    -O <job>                 : dumps job on local db to output"
-        echo "    -g <job>                 : generate skeleton for tasks in <job>"
-        echo "    -s code                  : downloads remote task definition"
-        echo "    -S code                  : downloads remote task and load on local db"
-        echo "    -e                       : locally edit job definition"
-        echo "    -J                       : list local job definitions"
-        echo "    -T                       : list local task definitions"
-        echo "    -l                       : list locally callable jobs"
-        echo "    -L                       : lists remotely available tasks"
-        echo "    -z                       : send diagnostics data back to server"
-}
-
-function collect_input_from_user()
-{
-	echo "Title:"
-	read joc_title
-	echo "Content:"
-	read joc_uncoded
-	echo $joc_uncoded | base64 > /tmp/base64_enc.txt
-	joc_content=$(tr -d '\n' < /tmp/base64_enc.txt)
-	echo "Code:" 
-	read joc_code 
-}
-
-function diagnostic()
-{
-    diag_file=$(mktemp /tmp/diag_XXXXXX)
-    HOST=$(hostname)
-    KERNEL=$(uname -a)
-    D='/sys/class/net'
-    for nic in $( ls $D ); do
-    if  grep -q up $D/$nic/operstate; then
-        #nic_address=$(cat $D/$nic/address)
-        IP=$(ip addr show $nic | awk '/inet / {print $2}' | cut -d/ -f 1)
-        MAC=$(ip link show $nic | awk '/ether/ {print $2}')
-        echo "{\"serial\": \"$SERIAL_NO\", \"hostname\": \"$HOST\", \"ip\": \"$IP\", \"mac\": \"$MAC\","\
-	" \"device\": \"$nic\", \"kernel\": \"$KERNEL\"}" >> $diag_file
-    fi
-    done
-    joc_title=$SERIAL_NO
-    cat $diag_file | base64 > /tmp/base64_enc.txt
-    joc_content=$(tr -d '\n' < /tmp/base64_enc.txt)
-    joc_code=$SERIAL_NO
-}
-
-function mqtt_subscribe()
-{
-    topic_name=$SERIAL_NO
-    while read msg;
-    do
-      echo "[$msg]";
-      jobfile=$JOBDIR"/"$msg".json"
-      echo "Reading job: [$jobfile]"
-      retrieve_tasks $jobfile
-      ${JSONENGINE_EXE} -i $jobfile
-    done < <(mosquitto_sub -t $topic_name -q 1)
-}
-
-
-function upload_job_definition()
-{
-	jobname=$1
-        jobfile=$JOBDIR"/"$jobname".json"
-	joc_title="eron:job:$jobname"
-	cat $jobfile | base64 > /tmp/base64_enc.txt
-	joc_content=$(tr -d '\n' < /tmp/base64_enc.txt)
-	joc_code="eron:job:$jobname"
-}
-
-function collect_cron_input()
-{
-	input_file=$1
-	echo "Code:"
-	read joc_code
-	joc_title=$joc_code
-	cat $input_file | base64 > /tmp/base64_jenc.txt
-	joc_content=$(tr -d '\n' < /tmp/base64_jenc.txt)
-}
-
-function collect_file_input()
-{
-	input_file=$1
-	joc_title=$(head -1 $input_file)
-	cat $input_file | base64 > /tmp/base64_enc.txt
-	joc_content=$(tr -d '\n' < /tmp/base64_enc.txt)
-	echo "Code:"
-	read joc_code
-}
-
-function import_json_job()
-{
-    tgzfile=$1
-    tar -xvf $tgzfile -C $ERON_HOME --strip-components=1
-}
-
-function export_json_job()
-{
-    jobname=$1
-    json=$JOBDIR"/"$jobname".json"
-    TMPDIR=$(mktemp -d /tmp/eron_job_export_XXXXXX)
-    CURRENT_DATE=$(date '+%Y%m%d')
-    mkdir -p $TMPDIR"/job-"$jobname
-    mkdir -p $TMPDIR"/job-"$jobname"/tasks"
-    mkdir -p $TMPDIR"/job-"$jobname"/jobs"
-    for x in $( $JSONENGINE_EXE -p $json ); do
-        echo "Processing task [$x]"; 
-        if [ ! -f ${WORKDIR}/${x} ]; then  
-            secure_get ${GET_BACKEND}/$x > ${TMPFILE}
-            cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["content"]' | base64 -d > ${WORKDIR}/${x}
-        else 
-          echo "Task [$x] already present";
-        fi
-        cp ${WORKDIR}/${x} $TMPDIR"/job-"$jobname"/tasks/"
-    done
-    cp $json $TMPDIR"/job-"$jobname"/jobs/"
-    tar cvfz "job-"$jobname"-"$CURRENT_DATE".tar.gz" -C $TMPDIR "job-"$jobname 
-}
-
-function retrieve_tasks()
-{
-    json=$1
-    for x in $( $JSONENGINE_EXE -p $json ); do
-        echo "Retrieving task [$x]"; 
-        if [ ! -f ${WORKDIR}/${x} ]; then  
-            secure_get ${GET_BACKEND}/$x > ${TMPFILE}
-            cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["content"]' | base64 -d > ${WORKDIR}/${x}
-        else 
-          echo "Task [$x] already present";
-        fi
-    done
-}
-
-##-- DB Functions
-
-function generate_local_tasks()
-{
-        job_name=$1
-	test -f $DIAG_DB || return 1
-	sql="select id_job from er_job where name ='$job_name';"
-	id_job=$(echo $sql | sqlite3 $DIAG_DB)
-	sql="select id_task from er_task where id_job ='$id_job';"
-	id_task_list=$(echo $sql | sqlite3 $DIAG_DB)
-        task_count=0
-        for id_task in $id_task_list; do
-            ret_config="#! /bin/bash";
-            ret_config+="\n";
-	    sql="select name from er_task where id_job ='$id_job' and id_task='$id_task';"
-	    task_name=$(echo $sql | sqlite3 $DIAG_DB)
-	    sql="select type from er_task where id_job ='$id_job' and id_task='$id_task';"
-	    task_type=$(echo $sql | sqlite3 $DIAG_DB)
-	    sql="select id_taskparam from er_taskparam where id_task ='$id_task' and id_task='$id_task';"
-	    id_taskparam_list=$(echo $sql | sqlite3 $DIAG_DB)
-            ret_config+="#\n"
-            param_count=0
-            for id_taskparam in $id_taskparam_list; do
-	        sql="select param_name from er_taskparam where id_taskparam ='$id_taskparam' and id_task='$id_task';"
-	        param_name=$(echo $sql | sqlite3 $DIAG_DB)
-	        sql="select param_value from er_taskparam where id_taskparam ='$id_taskparam' and id_task='$id_task';"
-	        param_value=$(echo $sql | sqlite3 $DIAG_DB)
-                uppercase_param=$(echo $param_name | tr '[:lower:]' '[:upper:]')
-                ret_config+="$PARAM_PREFIX$uppercase_param=__"$param_name"__"
-                ret_config+="\n"
-                pcount=$((param_count+1));
-                param_count=$pcount
-            done
-            count=$((task_count+1));
-            task_count=$count
-            test -f "$OUTPUTDIR/task.$task_name.sh" && echo "Keeping: [$OUTPUTDIR/task.$task_name.sh]" || echo "Generating:  [$OUTPUTDIR/task.$task_name.sh]"
-            test -f "$OUTPUTDIR/task.$task_name.sh" || printf "$ret_config" > $OUTPUTDIR/"task."$task_name".sh"
-        done
-}
-
-function purge_job()
-{
-        job_name=$1
-	test -f $DIAG_DB || return 1
-	sql="select id_job from er_job where name ='$job_name';"
-	id_job=$(echo $sql | sqlite3 $DIAG_DB)
-	sql="select id_task from er_task where id_job ='$id_job';"
-	id_task_list=$(echo $sql | sqlite3 $DIAG_DB)
-        for id_task in $id_task_list; do
-	    sql="select name from er_task where id_job ='$id_job' and id_task='$id_task';"
-	    task_name=$(echo $sql | sqlite3 $DIAG_DB)
-	    sql="select type from er_task where id_job ='$id_job' and id_task='$id_task';"
-	    task_type=$(echo $sql | sqlite3 $DIAG_DB)
-	    sql="select id_taskparam from er_taskparam where id_task ='$id_task' and id_task='$id_task';"
-	    id_taskparam_list=$(echo $sql | sqlite3 $DIAG_DB)
-            for id_taskparam in $id_taskparam_list; do
-	        sql="delete from er_taskparam where id_taskparam ='$id_taskparam' and id_job ='$id_job';"
-	        echo $sql | sqlite3 $DIAG_DB
-            done
-	    sql="delete from er_task where id_task ='$id_task';"
-	    echo $sql | sqlite3 $DIAG_DB
-        done
-	sql="delete from er_job where id_job ='$id_job';"
-	echo $sql | sqlite3 $DIAG_DB
-}
-
-function export_job()
-{
-        job_name=$1
-	test -f $DIAG_DB || return 1
-	sql="select id_job from er_job where name ='$job_name';"
-	id_job=$(echo $sql | sqlite3 $DIAG_DB)
-	sql="select id_task from er_task where id_job ='$id_job';"
-	id_task_list=$(echo $sql | sqlite3 $DIAG_DB)
-        ret_config="{\"name\": \"$job_name\","
-        ret_config+=" \"tasks\": ["
-        task_count=0
-        for id_task in $id_task_list; do
-	    sql="select name from er_task where id_job ='$id_job' and id_task='$id_task';"
-	    task_name=$(echo $sql | sqlite3 $DIAG_DB)
-	    sql="select type from er_task where id_job ='$id_job' and id_task='$id_task';"
-	    task_type=$(echo $sql | sqlite3 $DIAG_DB)
-            if [ "$task_count" != "0" ]; then
-                ret_config+=", ";
-            fi
-            ret_config+="{\"name\": \"$task_type\", \"type\": \"$task_type\", \"params\": "
-	    sql="select id_taskparam from er_taskparam where id_task ='$id_task' and id_task='$id_task';"
-	    id_taskparam_list=$(echo $sql | sqlite3 $DIAG_DB)
-            ret_config+="{"
-            param_count=0
-            for id_taskparam in $id_taskparam_list; do
-	        sql="select param_name from er_taskparam where id_taskparam ='$id_taskparam' and id_task='$id_task';"
-	        param_name=$(echo $sql | sqlite3 $DIAG_DB)
-	        sql="select param_value from er_taskparam where id_taskparam ='$id_taskparam' and id_task='$id_task';"
-	        param_value=$(echo $sql | sqlite3 $DIAG_DB)
-                if [ "$param_count" != "0" ]; then
-                    ret_config+=", ";
-                fi
-                ret_config+="\"$param_name\": \"$param_value\""
-                pcount=$((param_count+1));
-                param_count=$pcount
-            done
-            ret_config+="}"
-            ret_config+="}"
-            count=$((task_count+1));
-            task_count=$count
-        done
-        ret_config+=" ]"
-        ret_config+="}"
-        echo $ret_config
-}
-
-function edit_job()
-{
-    echo "Insert job name:"
-    read job_name
-    id_job=$(uuidgen)
-    insert_job $id_job $job_name 
-    choice="c"
-    while [ "$choice" != "x" ]; do
-        echo ""
-        echo "-------------"
-        echo "x to exit"
-        echo "a to add task"
-        read choice
-        if [ "$choice" = "a" ]; then
-            id_task=$(uuidgen)
-            echo ""
-            echo "Insert task name:"
-            read task_name
-            echo ""
-            echo "Insert task type:"
-            read task_type
-            insert_task $id_task $id_job $task_name $task_type
-            echo ""
-            echo "-------------"
-            echo "x to exit"
-            echo "a to add param"
-            read par_choice
-            while [ "$par_choice" = "a" ]; do
-                echo "Insert Parameter Name:"
-                read param_name
-                echo ""
-                echo "Insert Parameter Value:"
-                read param_value
-                echo ""
-                insert_param $id_task $param_name $param_value
-                echo ""
-                echo "-------------"
-                echo "x to exit"
-                echo "a to add param"
-                read par_choice
-            done
-        fi
-    done
-}
-
-function remote_list_to_local_db()
-{
-    secure_get ${GET_BACKEND} > ${TMPFILE}
-    cat ${TMPFILE} |  python -c 'import sys, json; print json.dumps(json.load(sys.stdin),indent=4)'
-    array_len=$(cat ${TMPFILE} | python -c 'import sys, json; print len(json.load(sys.stdin)["playlist"])')
-    acount=0;
-    while [ "$acount" -lt "$array_len" ]; do
-       echo "acount=$acount"
-       jsonblock=$(cat ${TMPFILE} | python -c "import sys, json; print json.load(sys.stdin)['playlist'][$acount]")
-       item_id=$(cat ${TMPFILE} | python -c "import sys, json; print json.load(sys.stdin)['playlist'][$acount]['id']")
-       item_title=$(cat ${TMPFILE} | python -c "import sys, json; print json.load(sys.stdin)['playlist'][$acount]['title']")
-       #echo $jsonblock
-       #item_id=$(echo $jsonblock | python -c 'import sys, json; print json.load(sys.stdin)["id"]')
-       #item_title=$(echo $jsonblock | python -c 'import sys, json; print json.load(sys.stdin)["title"]')
-       echo "ID: $item_id, TITLE: $item_title"
-       appo=$((acount++))
-       id_content=$(uuidgen)
-       sql="insert into rc_content (id_content, code, title, content) values ('$id_content', '$item_id', '$item_title', NULL);"
-       test -f $DIAG_DB || return 1
-       echo $sql | sqlite3 $DIAG_DB
-    done 
-}
-
-function remote_to_local_db()
-{
-    code=$1
-    secure_get ${GET_BACKEND}/$code > ${TMPFILE}
-    remote_id=$(cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["id"]') 
-    title=$(cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["title"]') 
-    content=$(cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["content"]') 
-    sql="insert into rc_content (id_content, code, title, content) values ('$remote_id', '$code', '$title', '$content');"
-    test -f $DIAG_DB || return 1
-    echo $sql | sqlite3 $DIAG_DB
-}
-
-function insert_param()
-{
-        id_taskparam=$(uuidgen)
-        id_task=$1
-        param_name=$2
-        param_value=$3
-	sql="insert into er_taskparam (id_taskparam, id_task, param_name, param_value) values ('$id_taskparam', '$id_task', '$param_name', '$param_value');"
-	test -f $DIAG_DB || return 1
-	echo $sql | sqlite3 $DIAG_DB
-}
-
-function insert_job()
-{
-        id_job=$1
-        name=$2
-	sql="insert into  er_job (id_job, name) values ('$id_job', '$name');"
-	test -f $DIAG_DB || return 2
-	echo $sql | sqlite3 $DIAG_DB
-}
-
-function list_tasks()
-{
-    sql="select name from er_task;"
-    job_list=$(echo $sql | sqlite3 $DIAG_DB)
-    echo $job_list
-}
-
-function list_jobs()
-{
-    sql="select name from er_job;"
-    job_list=$(echo $sql | sqlite3 $DIAG_DB)
-    echo $job_list
-}
-
-function insert_task()
-{
-        id_task=$1
-        id_job=$2
-        name=$3
-        vtype=$4
-	sql="insert into er_task (id_task, id_job, name, type) values ('$id_task', '$id_job', '$name', '$vtype');"
-	test -f $DIAG_DB || return 2
-	echo $sql | sqlite3 $DIAG_DB
-}
-
-function create_db()
-{
-	sql_job="create table er_job (id_job text, name text, comment text);"
-	sql_task="create table er_task (id_task text, id_job text, name text, type text);"
-	sql_param="create table er_taskparam (id_taskparam text, id_task text, param_name text, param_value text);"
-	echo $sql_job | sqlite3 $DIAG_DB
-	echo $sql_task | sqlite3 $DIAG_DB
-	echo $sql_param | sqlite3 $DIAG_DB
-
-	sql_content="create table rc_content (id_content text, code text, title text, content text);"
-	echo $sql_content | sqlite3 $DIAG_DB
-}
-
-
-# Cron stuff
-
-function read_cron()
-{
-    job_name=$1
-    echo "Insert hour" 
-    read hour
-    echo "Insert minute" 
-    read minute
-    echo "Insert dayOfMonth" 
-    read dayOfMonth
-    echo "Insert dayOfWeek" 
-    read dayOfWeek
-    echo "Insert month" 
-    read month
-    echo "Insert command" 
-    command="$0 -x $job_name"
-    bcommand=$(echo $command| base64) 
-    echo "{ \"hour\":\"$hour\", \"minute\":\"$minute\", \"dayOfMonth\":\"$dayOfMonth\", \"month\":\"$month\", \"dayOfWeek\":\"$dayOfWeek\", \"command\":\"$bcommand\" }" > $TMP_CRON_FILE
-}
-
-function security_generate_ca()
-{
-    iron ca create
-}
-
-function security_generate_service()
-{
-    servicex=$1
-    iron service setup $servicex 
-    iron service create $servicex 
-}
-
-function security_generate_csr()
-{
-    servicex=$1
-    clientx=$2
-    iron client setup $servicex $clientx
-    iron client csr  $servicex $clientx
-}
-
-function security_renew_certificate()
-{
-    servicex=$1
-    clientx=$2
-    REMOTE_CA_HOST=127.0.0.1
-    REMOTE_CA_PORT=8081
-    REMOTE_CA_PROTOCOL=https
-    caricandum=$SECURE_HOME/$servicex/certs/$clientx/$clientx.csr
-    $certificate=$(curl -F "file=@$caricandum" $REMOTE_CA_PROTOCOL://$REMOTE_CA_HOST:$REMOTE_CA_PORT/upload/$servicex/$clientx)
-    echo $certificate > $SECURE_HOME/$servicex/certs/$clientx/$clientx.crt
-}
-
-
-function list_local_jobs()
-{
-   #echo "JobDir=[$JOBDIR]"
-   idx=1
-   for f in $( find $JOBDIR ); do 
-       base_file=$(basename $f | sed -e s/.json$//;) 
-       echo $idx $base_file
-   appidx=$((idx+1))
-   idx=$appidx
-   done
-}
+source $ERON_LIBDIR/eron_help.sh
+source $ERON_LIBDIR/eron_config.sh
+source $ERON_LIBDIR/eron_interactive.sh
+source $ERON_LIBDIR/eron_filesystem.sh
+source $ERON_LIBDIR/eron_get.sh
+source $ERON_LIBDIR/eron_db.sh
+source $ERON_LIBDIR/eron_security.sh
+source $ERON_LIBDIR/eron_common.sh
+source $ERON_LIBDIR/eron_mqtt.sh
 
 # MAIN
 test_config 
@@ -554,142 +63,135 @@ SERIAL_FILE=$ERON_HOME/.serial
 test -f $SERIAL_FILE || uuidgen > $SERIAL_FILE
 SERIAL_NO=$(cat $SERIAL_FILE)
 
-if [ "$#" = "1" ]; then
-	if [ "$1" == "-c" ]; then
-		joc_tag="post"
-		collect_input_from_user 
-		dispatch 
-		exit 0
-	elif [ "$1" == "-L" ]; then
-		secure_get ${GET_BACKEND} > ${TMPFILE}
-		cat ${TMPFILE} |  python -c 'import sys, json; print json.dumps(json.load(sys.stdin),indent=4)'
-		exit 0
-	elif [ "$1" == "-l" ]; then
-		#find $JOBDIR
-                list_local_jobs
-		exit 0
-	elif [ "$1" == "-Y" ]; then
-		remote_list_to_local_db
-		exit 0
-	elif [ "$1" == "-J" ]; then
-		joblist=$(list_jobs) 
-		for j in $joblist; do
-                   echo "$j"
-                done
-		exit 0
-	elif [ "$1" == "-T" ]; then
-		tasklist=$(list_tasks) 
-		for t in $tasklist; do
-                   echo "$t"
-                done
-		exit 0
-	elif [ "$1" == "-k" ]; then
-                security_generate_csr
-                security_renew_certificate
-                exit 0
-	elif [ "$1" == "-z" ]; then
-                diagnostic
-		dispatch 
-                exit 0
-	elif [ "$1" == "-e" ]; then
-                edit_job
-                exit 0
-	elif [ "$1" == "-t" ]; then
-		mqtt_subscribe
-		exit 0
-	else
-		cl_usage
-		exit 1
-	fi
-fi
-	
-if [ "$#" = "2" ]; then
-	opt=$1
-	argvalue=$2
-	if [ "$opt" == "-i" ]; then
-		collect_file_input $argvalue
-		dispatch
-	elif [ "$opt" == "-W" ]; then
-		collect_cron_input $argvalue
-		dispatch
-		exit 0
-	elif [ "$opt" == "-w" ]; then
-                TMP_CRON_FILE="cron-"$argvalue"-"$(uuidgen)".json"
-		read_cron $argvalue
-                echo "Created [$TMP_CRON_FILE]"
-		exit 0
-	elif [ "$opt" == "-u" ]; then
-		upload_job_definition $argvalue
-		dispatch
-                exit 0
-	elif [ "$opt" == "-S" ]; then
-                remote_to_local_db $argvalue
-                exit 0
-	elif [ "$opt" == "-E" ]; then
-		export_json_job $argvalue
-                exit 0
-	elif [ "$opt" == "-I" ]; then
-		import_json_job $argvalue
-                exit 0
-	elif [ "$opt" == "-O" ]; then
-		export_job $argvalue
-                exit 0
-	elif [ "$opt" == "-r" ]; then
-                TMP_CRON_FILE=$(mktemp /tmp/unsecure_XXXXXXXX)
-		read_cron $argvalue
-                ${JSONENGINE_EXE} -c $TMP_CRON_FILE
-	elif [ "$opt" == "-R" ]; then
-                TMP_CRON_FILE=$(mktemp /tmp/unsecure_XXXXXXXX)
-		read_cron $argvalue
-                ${JSONENGINE_EXE} -C $TMP_CRON_FILE
-                exit 0
-	elif [ "$opt" == "-p" ]; then
-                ${JSONENGINE_EXE} -c $argvalue
-                exit 0
-	elif [ "$opt" == "-P" ]; then
-	    secure_get ${GET_BACKEND}/$argvalue > ${TMPFILE}
-            ${JSONENGINE_EXE} -c ${TMPFILE}
-            exit 0
-	elif [ "$opt" == "-o" ]; then
-		export_job $argvalue > $JOBDIR/$argvalue".json"
-                exit 0
-	elif [ "$opt" == "-g" ]; then
-		generate_local_tasks $argvalue 
-                exit 0
-	elif [ "$opt" == "-D" ]; then
-		purge_job $argvalue 
-                exit 0
-	elif [ "$opt" == "-s" ]; then
-		secure_get ${GET_BACKEND}/$argvalue > ${TMPFILE}
-		cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["content"]' | base64 -d
-		exit 0
-	elif [ "$opt" == "-X" ]; then
-            retrieve_tasks $argvalue
-            ${JSONENGINE_EXE} -i $argvalue
-            exit 0
-	elif [ "$opt" == "-b" ]; then
-            diagnostic
-	    dispatch 
+OPTPARSE=`getopt -o hcLlYJTkzeti:W:u:S:E:I:O:r:R:p:o:g:D:s:X:b:x:\
+	--long "help,\
+	        create,\
+	        list-remote,\
+	        list,\
+	        import-blob,\
+	        list-job-definition,\
+                list-task-definition,\
+                get-client-certificate,\
+                edit-job,\
+                mqtt-subscribe,\
+                file-import,\
+                export-cronfile:,\
+                upload-job:,\
+                fetch-task:,\
+                export-job:,\
+                import-job:,\
+                output-job-definition:,\
+                cron-append:,\
+                cron-set:,\
+                cron-set-file:,\
+                job-definition-to-file:,\
+                job-skel-out:,\
+                purge-job:, \
+                save-content:, \
+                execute-from:, \
+                boot:, \
+                execute:"  -n 'eron' -- "$@"`
 
-            jobfile=$JOBDIR"/"$argvalue".json"
-	    secure_get ${GET_BACKEND}/$argvalue > ${TMPFILE}
-	    cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["content"]' | base64 -d > $jobfile
-            echo "Reading job: [$jobfile]"
-            retrieve_tasks $jobfile
-            ${JSONENGINE_EXE} -i $jobfile
-            exit 0
-	elif [ "$opt" == "-x" ]; then
-            jobfile=$JOBDIR"/"$argvalue".json"
-            echo "Reading job: [$jobfile]"
-            retrieve_tasks $jobfile
-            ${JSONENGINE_EXE} -i $jobfile
-            exit 0
-	else
-		cl_usage
-		exit 1
-	fi
-else
+#TODO : modes job task blob cron mqtt
+
+if [ $? != 0 ] ; then echo "Exiting..."  >&2 ; exit 1 ; fi
+if [ "$#" = 0 ] ; then cl_usage ; exit 1 ; fi
+
+# Note the quotes around `$TEMP': they are essential!
+eval set -- "$OPTPARSE"
+
+while true; do
+  case "$1" in
+    -c | --create ) 
+        create_remote_content
+        shift ;;
+    -L | --list-remote ) 
+        list_remote_content
+        shift ;;
+    -l | --list ) 
+        list_local_jobs
+        shift ;;
+    -Y | --import-blob ) 
+	remote_list_to_local_db
+        shift ;;
+    -J | --list-job-definition ) 
+        print_job_list
+        shift ;;
+    -T | --list-task-definition ) 
+        print_task_list
+        shift ;;
+    -k | --get-client-certificate ) 
+        security_generate_csr
+        security_renew_certificate
+        shift ;;
+    -z | --create ) 
+        diagnostic
+	dispatch 
+        shift ;;
+    -e | --edit-job ) 
+        edit_job
+        shift ;;
+    -t | --mqtt-subscribe ) 
+	mqtt_subscribe
+        shift ;;
+    -h | --help ) 
 	cl_usage
-	exit 1
-fi
-
+        shift ;;
+    -i | --upload-job ) 
+	collect_file_input $2
+	dispatch
+	shift 2 ;;
+    -W | --cron-push ) 
+	collect_cron_input $2
+	dispatch
+	shift 2 ;;
+    -u | --upload-job ) 
+	upload_job_definition $2
+	dispatch
+	shift 2 ;;
+    -S | --fetch-task ) 
+        remote_to_local_db $2
+	shift 2 ;;
+    -E | --export-job ) 
+	export_json_job $2
+	shift 2 ;;
+    -I | --import-job ) 
+	import_json_job $2
+	shift 2 ;;
+    -O | --output-job-definition ) 
+	export_job $2
+	shift 2 ;;
+    -R | --cron-set ) 
+        cron_set_single_job $2
+	shift 2 ;;
+    -p | --cron-set-file ) 
+        ${JSONENGINE_EXE} -c $2
+	shift 2 ;;
+    -o | --job-definition-to-file ) 
+	export_job $2 > $JOBDIR/$2".json"
+	shift 2 ;;
+    -g | --job-skel-out ) 
+	generate_local_tasks $2 
+	shift 2 ;;
+    -D | --purge-job ) 
+	purge_job $2 
+	shift 2 ;;
+    -s | --save-content ) 
+        retrieve_remote_content $2
+	shift 2 ;;
+    -X | --execute-from ) 
+        execute_job_from_file $2
+	shift 2 ;;
+    -b | --boot ) 
+	boot_from_job $2
+	shift 2 ;;
+    -x | --execute ) 
+        execute_named_job $2
+	shift 2 ;;
+    -r | --cron-append ) 
+	cron_append_job $2
+	shift 2 ;;
+    -- ) shift; break ;;
+    * ) cl_usage break ;;
+  esac
+done
