@@ -1,80 +1,178 @@
-#! /bin/bash 
-
+#! /bin/bash
 
 function generate_local_tasks()
 {
-        job_name=$1
-	test -f $DIAG_DB || return 1
-	sql="select id_job from er_job where name ='$job_name';"
-	id_job=$(echo $sql | sqlite3 $DIAG_DB)
-	sql="select id_task from er_task where id_job ='$id_job';"
-	id_task_list=$(echo $sql | sqlite3 $DIAG_DB)
-        task_count=0
-        for id_task in $id_task_list; do
-            ret_config="#! /bin/bash";
-            ret_config+="\n";
-	    sql="select name from er_task where id_job ='$id_job' and id_task='$id_task';"
-	    task_name=$(echo $sql | sqlite3 $DIAG_DB)
-	    sql="select type from er_task where id_job ='$id_job' and id_task='$id_task';"
-	    task_type=$(echo $sql | sqlite3 $DIAG_DB)
-	    sql="select id_taskparam from er_taskparam where id_task ='$id_task' and id_task='$id_task';"
-	    id_taskparam_list=$(echo $sql | sqlite3 $DIAG_DB)
-            ret_config+="#\n"
-            param_count=0
-            for id_taskparam in $id_taskparam_list; do
-	        sql="select param_name from er_taskparam where id_taskparam ='$id_taskparam' and id_task='$id_task';"
-	        param_name=$(echo $sql | sqlite3 $DIAG_DB)
-	        sql="select param_value from er_taskparam where id_taskparam ='$id_taskparam' and id_task='$id_task';"
-	        param_value=$(echo $sql | sqlite3 $DIAG_DB)
-                uppercase_param=$(echo $param_name | tr '[:lower:]' '[:upper:]')
-                ret_config+="$PARAM_PREFIX$uppercase_param=__"$param_name"__"
-                ret_config+="\n"
-                pcount=$((param_count+1));
-                param_count=$pcount
-            done
-            count=$((task_count+1));
-            task_count=$count
-            test -f "$OUTPUTDIR/task.$task_name.sh" && echo "Keeping: [$OUTPUTDIR/task.$task_name.sh]" || echo "Generating:  [$OUTPUTDIR/task.$task_name.sh]"
-            test -f "$OUTPUTDIR/task.$task_name.sh" || printf "$ret_config" > $OUTPUTDIR/"task."$task_name".sh"
+    job_name=$1
+    test -f $DIAG_DB || return 1
+    sql="select id_job from er_job where name ='$job_name';"
+    id_job=$(echo $sql | sqlite3 $DIAG_DB)
+    sql="select id_task from er_task where id_job ='$id_job';"
+    id_task_list=$(echo $sql | sqlite3 $DIAG_DB)
+    task_count=0
+    for id_task in $id_task_list; do
+        ret_config="#! /bin/bash";
+        ret_config+="\n";
+        sql="select name from er_task where id_job ='$id_job' and id_task='$id_task';"
+        task_name=$(echo $sql | sqlite3 $DIAG_DB)
+        sql="select type from er_task where id_job ='$id_job' and id_task='$id_task';"
+        task_type=$(echo $sql | sqlite3 $DIAG_DB)
+        sql="select id_taskparam from er_taskparam where id_task ='$id_task' and id_task='$id_task';"
+        id_taskparam_list=$(echo $sql | sqlite3 $DIAG_DB)
+        ret_config+="#\n"
+        param_count=0
+        ret_config+="if [ \"\$#\" = \"0\" ]; then\n"
+        ret_config+="\tTASK_NAME=\$(basename \$0)\n"
+        param_names_list=""
+        for id_taskparam in $id_taskparam_list; do
+            sql="select param_name from er_taskparam where id_taskparam ='$id_taskparam' and id_task='$id_task';"
+            param_name=$(echo $sql | sqlite3 $DIAG_DB)
+            param_names_list+=" $param_name"
+            sql="select param_value from er_taskparam where id_taskparam ='$id_taskparam' and id_task='$id_task';"
+            param_value=$(echo $sql | sqlite3 $DIAG_DB)
+            uppercase_param=$(echo $param_name | tr '[:lower:]' '[:upper:]')
+            ret_config+="\t$PARAM_PREFIX$uppercase_param=__"$param_name"__"
+            ret_config+="\n"
+            pcount=$((param_count+1));
+            param_count=$pcount
         done
+        ret_config+="fi\n"
+        ret_config+="\n"
+        ret_config+="function task_content()\n"
+        ret_config+="{\n"
+        ret_config+="    echo \"script:[\$0] with args:"
+        for pname in $param_names_list; do 
+            uppercase_param=$(echo $pname | tr '[:lower:]' '[:upper:]')
+            ret_config+="$pname: [\$$uppercase_param] "; 
+        done
+        ret_config+="\"\n"
+        ret_config+="    #  HERE YOUR TASK CODE\n"
+        ret_config+="}\n"
+        ret_config+="\n"
+        ret_config+="# LIB FUNCTIONS\n"
+        ret_config+="#----------------------------------------------------------------------\n"
+        ret_config+="\n"
+        ret_config+="function task_usage()\n"
+        ret_config+="{\n"
+        ret_config+="\techo \"\$0 "
+
+        for pname in $param_names_list; do
+            ret_config+="--$pname=<value> "
+        done
+        ret_config+="\"\n}\n\n"
+        ret_config+="function task_options_parse()\n"
+        ret_config+="{\n"
+        ret_config+="    OPTPARSE=\`getopt -o h --long help\""
+        for pname in $param_names_list; do ret_config+=",$pname:"; done
+        ret_config+="\"  -n \'$task_name\' -- \"\$@\"\`\n"
+        ret_config+="\n"
+        ret_config+="    eval set -- \"\$OPTPARSE\"\n"
+        ret_config+="\n"
+        ret_config+="    while true; do\n"
+        ret_config+="    case "\$1" in\n"
+	ret_config+="\t-h | --help )\n"; 
+	ret_config+="\t    task_usage ; break\n"; 
+	ret_config+="\t    shift ;;\n"; 
+        for pname in $param_names_list; do 
+            uppercase_param=$(echo $pname | tr '[:lower:]' '[:upper:]')
+	    ret_config+="\t--$pname )\n"; 
+	    ret_config+="\t    $uppercase_param=\$2\n"; 
+	    ret_config+="\t    shift 2 ;;\n"; 
+        done
+	ret_config+="        -- ) shift; break ;;\n"
+	ret_config+="        * ) task_usage break ;;\n"
+	ret_config+="    esac\n"
+	#ret_config+="    break;\n"
+	ret_config+="    done\n"
+	ret_config+="}\n"
+	ret_config+="\n"
+	ret_config+="task_options_parse\n"
+	ret_config+="# MAIN\n"
+	ret_config+="\n"
+	ret_config+="if [ \"\$#\" > \"0\" ]; then task_options_parse \"\$@\"; fi\n"
+	#ret_config+="if [ \"\$#\" = \"$param_count\" ]; then task_options_parse \"\$@\"; else task_usage; fi\n"
+	ret_config+="task_content\n"
+
+        count=$((task_count+1));
+        task_count=$count
+        test -f "$OUTPUTDIR/task.$task_name.sh" && echo "Keeping: [$OUTPUTDIR/task.$task_name.sh]" || echo "Generating:  [$OUTPUTDIR/task.$task_name.sh]"
+        test -f "$OUTPUTDIR/task.$task_name.sh" || printf "$ret_config" > $OUTPUTDIR/"task."$task_name".sh"
+    done
+}
+
+function generate_local_tasks_simple()
+{
+    job_name=$1
+    test -f $DIAG_DB || return 1
+    sql="select id_job from er_job where name ='$job_name';"
+    id_job=$(echo $sql | sqlite3 $DIAG_DB)
+    sql="select id_task from er_task where id_job ='$id_job';"
+    id_task_list=$(echo $sql | sqlite3 $DIAG_DB)
+    task_count=0
+    for id_task in $id_task_list; do
+        ret_config="#! /bin/bash";
+        ret_config+="\n";
+        sql="select name from er_task where id_job ='$id_job' and id_task='$id_task';"
+        task_name=$(echo $sql | sqlite3 $DIAG_DB)
+        sql="select type from er_task where id_job ='$id_job' and id_task='$id_task';"
+        task_type=$(echo $sql | sqlite3 $DIAG_DB)
+        sql="select id_taskparam from er_taskparam where id_task ='$id_task' and id_task='$id_task';"
+        id_taskparam_list=$(echo $sql | sqlite3 $DIAG_DB)
+        ret_config+="#\n"
+        param_count=0
+        for id_taskparam in $id_taskparam_list; do
+            sql="select param_name from er_taskparam where id_taskparam ='$id_taskparam' and id_task='$id_task';"
+            param_name=$(echo $sql | sqlite3 $DIAG_DB)
+            sql="select param_value from er_taskparam where id_taskparam ='$id_taskparam' and id_task='$id_task';"
+            param_value=$(echo $sql | sqlite3 $DIAG_DB)
+            uppercase_param=$(echo $param_name | tr '[:lower:]' '[:upper:]')
+            ret_config+="$PARAM_PREFIX$uppercase_param=__"$param_name"__"
+            ret_config+="\n"
+            pcount=$((param_count+1));
+            param_count=$pcount
+        done
+        count=$((task_count+1));
+        task_count=$count
+        test -f "$OUTPUTDIR/task.$task_name.sh" && echo "Keeping: [$OUTPUTDIR/task.$task_name.sh]" || echo "Generating:  [$OUTPUTDIR/task.$task_name.sh]"
+        test -f "$OUTPUTDIR/task.$task_name.sh" || printf "$ret_config" > $OUTPUTDIR/"task."$task_name".sh"
+    done
 }
 
 function purge_job()
 {
-        job_name=$1
-	test -f $DIAG_DB || return 1
-	sql="select id_job from er_job where name ='$job_name';"
-	id_job=$(echo $sql | sqlite3 $DIAG_DB)
-	sql="select id_task from er_task where id_job ='$id_job';"
-	id_task_list=$(echo $sql | sqlite3 $DIAG_DB)
-        for id_task in $id_task_list; do
-	    sql="select name from er_task where id_job ='$id_job' and id_task='$id_task';"
-	    task_name=$(echo $sql | sqlite3 $DIAG_DB)
-	    sql="select type from er_task where id_job ='$id_job' and id_task='$id_task';"
-	    task_type=$(echo $sql | sqlite3 $DIAG_DB)
-	    sql="select id_taskparam from er_taskparam where id_task ='$id_task' and id_task='$id_task';"
-	    id_taskparam_list=$(echo $sql | sqlite3 $DIAG_DB)
-            for id_taskparam in $id_taskparam_list; do
-	        sql="delete from er_taskparam where id_taskparam ='$id_taskparam' and id_job ='$id_job';"
-	        echo $sql | sqlite3 $DIAG_DB
-            done
-	    sql="delete from er_task where id_task ='$id_task';"
-	    echo $sql | sqlite3 $DIAG_DB
+    job_name=$1
+    test -f $DIAG_DB || return 1
+    sql="select id_job from er_job where name ='$job_name';"
+    id_job=$(echo $sql | sqlite3 $DIAG_DB)
+    sql="select id_task from er_task where id_job ='$id_job';"
+    id_task_list=$(echo $sql | sqlite3 $DIAG_DB)
+    for id_task in $id_task_list; do
+        sql="select name from er_task where id_job ='$id_job' and id_task='$id_task';"
+        task_name=$(echo $sql | sqlite3 $DIAG_DB)
+        sql="select type from er_task where id_job ='$id_job' and id_task='$id_task';"
+        task_type=$(echo $sql | sqlite3 $DIAG_DB)
+        sql="select id_taskparam from er_taskparam where id_task ='$id_task' and id_task='$id_task';"
+        id_taskparam_list=$(echo $sql | sqlite3 $DIAG_DB)
+        for id_taskparam in $id_taskparam_list; do
+            sql="delete from er_taskparam where id_taskparam ='$id_taskparam' and id_job ='$id_job';"
+            echo $sql | sqlite3 $DIAG_DB
         done
-	sql="delete from er_job where id_job ='$id_job';"
-	echo $sql | sqlite3 $DIAG_DB
+        sql="delete from er_task where id_task ='$id_task';"
+        echo $sql | sqlite3 $DIAG_DB
+    done
+    sql="delete from er_job where id_job ='$id_job';"
+    echo $sql | sqlite3 $DIAG_DB
 }
 
 function export_job()
 {
-        job_name=$1
-	test -f $DIAG_DB || return 1
-	sql="select id_job from er_job where name ='$job_name';"
-	id_job=$(echo $sql | sqlite3 $DIAG_DB)
-	sql="select id_task from er_task where id_job ='$id_job';"
-	id_task_list=$(echo $sql | sqlite3 $DIAG_DB)
-        ret_config="{\"name\": \"$job_name\","
-        ret_config+=" \"tasks\": ["
+    job_name=$1
+    test -f $DIAG_DB || return 1
+    sql="select id_job from er_job where name ='$job_name';"
+    id_job=$(echo $sql | sqlite3 $DIAG_DB)
+    sql="select id_task from er_task where id_job ='$id_job';"
+    id_task_list=$(echo $sql | sqlite3 $DIAG_DB)
+    ret_config="{\"name\": \"$job_name\","
+    ret_config+=" \"tasks\": ["
         task_count=0
         for id_task in $id_task_list; do
 	    sql="select name from er_task where id_job ='$id_job' and id_task='$id_task';"
@@ -107,8 +205,8 @@ function export_job()
             task_count=$count
         done
         ret_config+=" ]"
-        ret_config+="}"
-        echo $ret_config
+    ret_config+="}"
+    echo $ret_config
 }
 
 function edit_job()
@@ -116,7 +214,7 @@ function edit_job()
     echo "Insert job name:"
     read job_name
     id_job=$(uuidgen)
-    insert_job $id_job $job_name 
+    insert_job $id_job $job_name
     choice="c"
     while [ "$choice" != "x" ]; do
         echo ""
@@ -163,26 +261,26 @@ function remote_list_to_local_db()
     array_len=$(cat ${TMPFILE} | python -c 'import sys, json; print len(json.load(sys.stdin)["playlist"])')
     acount=0;
     while [ "$acount" -lt "$array_len" ]; do
-       echo "acount=$acount"
-       jsonblock=$(cat ${TMPFILE} | python -c "import sys, json; print json.load(sys.stdin)['playlist'][$acount]")
-       item_id=$(cat ${TMPFILE} | python -c "import sys, json; print json.load(sys.stdin)['playlist'][$acount]['id']")
-       item_title=$(cat ${TMPFILE} | python -c "import sys, json; print json.load(sys.stdin)['playlist'][$acount]['title']")
-       echo "ID: $item_id, TITLE: $item_title"
-       appo=$((acount++))
-       id_content=$(uuidgen)
-       sql="insert into rc_content (id_content, code, title, content) values ('$id_content', '$item_id', '$item_title', NULL);"
-       test -f $DIAG_DB || return 1
-       echo $sql | sqlite3 $DIAG_DB
-    done 
+        echo "acount=$acount"
+        jsonblock=$(cat ${TMPFILE} | python -c "import sys, json; print json.load(sys.stdin)['playlist'][$acount]")
+        item_id=$(cat ${TMPFILE} | python -c "import sys, json; print json.load(sys.stdin)['playlist'][$acount]['id']")
+        item_title=$(cat ${TMPFILE} | python -c "import sys, json; print json.load(sys.stdin)['playlist'][$acount]['title']")
+        echo "ID: $item_id, TITLE: $item_title"
+        appo=$((acount++))
+        id_content=$(uuidgen)
+        sql="insert into rc_content (id_content, code, title, content) values ('$id_content', '$item_id', '$item_title', NULL);"
+        test -f $DIAG_DB || return 1
+        echo $sql | sqlite3 $DIAG_DB
+    done
 }
 
 function remote_to_local_db()
 {
     code=$1
     secure_get ${GET_BACKEND}/$code > ${TMPFILE}
-    remote_id=$(cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["id"]') 
-    title=$(cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["title"]') 
-    content=$(cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["content"]') 
+    remote_id=$(cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["id"]')
+    title=$(cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["title"]')
+    content=$(cat ${TMPFILE} | python -c 'import sys, json; print json.load(sys.stdin)["content"]')
     sql="insert into rc_content (id_content, code, title, content) values ('$remote_id', '$code', '$title', '$content');"
     test -f $DIAG_DB || return 1
     echo $sql | sqlite3 $DIAG_DB
@@ -190,22 +288,22 @@ function remote_to_local_db()
 
 function insert_param()
 {
-        id_taskparam=$(uuidgen)
-        id_task=$1
-        param_name=$2
-        param_value=$3
-	sql="insert into er_taskparam (id_taskparam, id_task, param_name, param_value) values ('$id_taskparam', '$id_task', '$param_name', '$param_value');"
-	test -f $DIAG_DB || return 1
-	echo $sql | sqlite3 $DIAG_DB
+    id_taskparam=$(uuidgen)
+    id_task=$1
+    param_name=$2
+    param_value=$3
+    sql="insert into er_taskparam (id_taskparam, id_task, param_name, param_value) values ('$id_taskparam', '$id_task', '$param_name', '$param_value');"
+    test -f $DIAG_DB || return 1
+    echo $sql | sqlite3 $DIAG_DB
 }
 
 function insert_job()
 {
-        id_job=$1
-        name=$2
-	sql="insert into  er_job (id_job, name) values ('$id_job', '$name');"
-	test -f $DIAG_DB || return 2
-	echo $sql | sqlite3 $DIAG_DB
+    id_job=$1
+    name=$2
+    sql="insert into  er_job (id_job, name) values ('$id_job', '$name');"
+    test -f $DIAG_DB || return 2
+    echo $sql | sqlite3 $DIAG_DB
 }
 
 function list_tasks()
@@ -224,26 +322,26 @@ function list_jobs()
 
 function insert_task()
 {
-        id_task=$1
-        id_job=$2
-        name=$3
-        vtype=$4
-	sql="insert into er_task (id_task, id_job, name, type) values ('$id_task', '$id_job', '$name', '$vtype');"
-	test -f $DIAG_DB || return 2
-	echo $sql | sqlite3 $DIAG_DB
+    id_task=$1
+    id_job=$2
+    name=$3
+    vtype=$4
+    sql="insert into er_task (id_task, id_job, name, type) values ('$id_task', '$id_job', '$name', '$vtype');"
+    test -f $DIAG_DB || return 2
+    echo $sql | sqlite3 $DIAG_DB
 }
 
 function create_db()
 {
-	sql_job="create table er_job (id_job text, name text, comment text);"
-	sql_task="create table er_task (id_task text, id_job text, name text, type text);"
-	sql_param="create table er_taskparam (id_taskparam text, id_task text, param_name text, param_value text);"
-	echo $sql_job | sqlite3 $DIAG_DB
-	echo $sql_task | sqlite3 $DIAG_DB
-	echo $sql_param | sqlite3 $DIAG_DB
+    sql_job="create table er_job (id_job text, name text, comment text);"
+    sql_task="create table er_task (id_task text, id_job text, name text, type text);"
+    sql_param="create table er_taskparam (id_taskparam text, id_task text, param_name text, param_value text);"
+    echo $sql_job | sqlite3 $DIAG_DB
+    echo $sql_task | sqlite3 $DIAG_DB
+    echo $sql_param | sqlite3 $DIAG_DB
 
-	sql_content="create table rc_content (id_content text, code text, title text, content text);"
-	echo $sql_content | sqlite3 $DIAG_DB
+    sql_content="create table rc_content (id_content text, code text, title text, content text);"
+    echo $sql_content | sqlite3 $DIAG_DB
 }
 
 
