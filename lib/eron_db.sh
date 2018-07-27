@@ -61,7 +61,7 @@ function generate_local_tasks()
         ret_config+="\"\n}\n\n"
         ret_config+="function task_options_parse()\n"
         ret_config+="{\n"
-        ret_config+="    OPTPARSE=\`getopt -o h --long help\""
+        ret_config+="    OPTPARSE=\`getopt -o h --long \"help"
         for pname in $param_names_list; do ret_config+=",$pname:"; done
         ret_config+="\"  -n \'$task_name\' -- \"\$@\"\`\n"
         ret_config+="\n"
